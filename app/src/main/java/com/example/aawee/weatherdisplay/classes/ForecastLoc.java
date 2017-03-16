@@ -1,5 +1,7 @@
 package com.example.aawee.weatherdisplay.classes;
 
+import com.google.gson.annotations.SerializedName;
+
 import java.util.List;
 
 /**
@@ -8,11 +10,23 @@ import java.util.List;
 
 public class ForecastLoc {
 
-    String name; // name of the location
-    Coord coord; // coordinates of the location
+    private String name; // name of the location
+    private Coord coord; // coordinates of the location
 
-    WeatherMain main; // field with info about temperature, humidity, etc
-    List<WeatherType> weather; // field with information about weather type: Clear, Cloudy, etc
+    private WeatherMain main; // field with info about temperature, humidity, etc
+    private List<WeatherType> weather; // field with information about weather type: Clear, Cloudy, etc
+
+    @SerializedName("dt")
+    private long time;
+
+    public ForecastLoc (String locName, Coord coordinates,
+                        WeatherMain weatherMain, List<WeatherType> weatherTypes, long timeCreated) {
+        name = locName;
+        coord = coordinates;
+        main = weatherMain;
+        weather = weatherTypes;
+        time = timeCreated;
+    }
 
     public String getName() {
         return name;
@@ -29,4 +43,6 @@ public class ForecastLoc {
     public List<WeatherType> getWeather() {
         return weather;
     }
+
+    public long getTime() { return time; }
 }

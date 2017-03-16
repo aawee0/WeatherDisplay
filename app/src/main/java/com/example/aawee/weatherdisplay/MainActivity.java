@@ -1,15 +1,17 @@
 package com.example.aawee.weatherdisplay;
 
-import android.os.AsyncTask;
+import android.content.ContentValues;
+import android.database.SQLException;
+import android.database.sqlite.SQLiteDatabase;
 import android.os.Bundle;
-import android.os.Handler;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import com.example.aawee.weatherdisplay.classes.ForecastArea;
 import com.example.aawee.weatherdisplay.classes.ForecastLoc;
+import com.example.aawee.weatherdisplay.database.ForecastContract;
+import com.example.aawee.weatherdisplay.database.ForecastDbHelper;
 import com.example.aawee.weatherdisplay.tools.RemoteFetch;
 import com.example.aawee.weatherdisplay.tools.Utilities;
 import com.google.android.gms.maps.CameraUpdate;
@@ -17,16 +19,17 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.MapFragment;
 import com.google.android.gms.maps.OnMapReadyCallback;
+import com.google.android.gms.maps.model.BitmapDescriptor;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
 import com.google.android.gms.maps.model.MarkerOptions;
 
-import org.json.JSONObject;
-
+import java.util.HashMap;
 import java.util.List;
 
 import rx.Observable;
+import rx.Scheduler;
 import rx.Subscriber;
 import rx.android.schedulers.AndroidSchedulers;
 import rx.schedulers.Schedulers;
@@ -42,13 +45,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private TextView mDisplayText;
     private MapFragment mMapFragment;
     private GoogleMap googleMap;
-    private ForecastArea mForecastArea;
+    private HashMap<String, MarkerOptions> mMarkerOptions;
 
-    Handler handler;
-
-    public MainActivity(){
-        handler = new Handler();
-    }
+    // DB-related
+    private SQLiteDatabase mainDB;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,7 +62,22 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mMapFragment = (MapFragment) getFragmentManager().findFragmentById(map);
         mMapFragment.getMapAsync(this);
 
+        // database-related
+        ForecastDbHelper dbHelper = new ForecastDbHelper(this);
+        mainDB = dbHelper.getWritableDatabase();
 
+        try {
+            mainDB.beginTransaction();
+            mainDB.delete(ForecastContract.ForecastLocDB.TABLE_NAME, null,null);
+            mainDB.setTransactionSuccessful();
+        }
+        catch (SQLException e) {
+            // error
+            Log.e("DBerr", e.getStackTrace().toString() );
+        }
+        finally {
+            mainDB.endTransaction();
+        }
 
     }
 
@@ -99,24 +114,19 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     public void onCameraIdle() {
         googleMap.setOnCameraIdleListener(null);
         try {
+            //WHEN CAMERA MOVEMENT STOPS
 
+            googleMap.clear(); // clear all markers
+            mMarkerOptions = new HashMap<String, MarkerOptions>();
 
-
+            // get screen bounds and zoom
             double mapZoom = googleMap.getCameraPosition().zoom;
             LatLngBounds bounds = (googleMap.getProjection().getVisibleRegion()).latLngBounds;
             LatLng ne = bounds.northeast;
             LatLng sw = bounds.southwest;
 
-
-            Log.d("JSONnot", Double.toString(sw.longitude) + " " + Double.toString(sw.latitude) + " " +
-                    Double.toString(ne.longitude) + " " + Double.toString(ne.latitude));
-
-            //RemoteFetch.getForecastResponse(sw.longitude, sw.latitude,
-            //        ne.longitude, ne.latitude, (int) mapZoom, "45f96ecf780e933deba504d9df18e977");
-            //new getWeatherDataTask().execute(sw.longitude, sw.latitude, ne.longitude, ne.latitude, mapZoom);
-
+            // set subscriber for database and api request
             setSubscriber(sw.longitude, sw.latitude, ne.longitude, ne.latitude, (int) mapZoom);
-
         }
         catch (Error e) {
             Log.e("MAPerr", e.getMessage());
@@ -126,55 +136,41 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     public void setSubscriber (double lonLeft, double latBottom, double lonRight, double latTop, int zoom) {
 
-        Subscriber<ForecastArea> subscriber = new Subscriber<ForecastArea>() {
-            @Override
-            public void onCompleted() {
-                Log.d("RXJavaNot", "Subscriber completed");
-            }
+        // threads
+        Scheduler executionThread = Schedulers.io();
+        Scheduler mainThread = AndroidSchedulers.mainThread();
 
-            @Override
-            public void onError(Throwable e) {
+        // get response (DB concatenated with API)
+        Observable<ForecastArea> behaviorSubject = RemoteFetch.getConcatenatedResponse(mainDB,
+                lonLeft, latBottom, lonRight,latTop, zoom);
 
-            }
+        behaviorSubject
+                .subscribeOn(executionThread) // thread for execution
+                .observeOn(mainThread) // observe in main thread
+                .subscribe(new Subscriber<ForecastArea>() {
+                    @Override
+                    public void onCompleted() {
+                        // Log.d("RXJavaNot", "Subscriber completed");
+                    }
 
-            @Override
-            public void onNext(ForecastArea forecastArea) {
-                Log.d("RXJavaNot", forecastArea.getList().get(0).getName() + " " + forecastArea.getList().get(0).getCoord().getLat());
-                drawMarkers(forecastArea.getList());
-            }
-        };
+                    @Override
+                    public void onError(Throwable e) {
+                        // handle error
+                    }
 
-        Observable<ForecastArea> call = RemoteFetch.getForecastResponse(lonLeft, latBottom,
-                lonRight,latTop, zoom, getString(R.string.open_weather_maps_app_id));
-
-        call.subscribeOn(Schedulers.io()) // thread for execution
-                .observeOn(AndroidSchedulers.mainThread()) // observe in main thread
-                .subscribe(subscriber);
-    }
-
-    private class getWeatherDataTask extends AsyncTask<Double, Void, JSONObject> {
-        @Override
-        protected JSONObject doInBackground(Double... params) {
-            JSONObject data = RemoteFetch.getJsonForArea(getBaseContext(), params[0],params[1],params[2],params[3],params[4]);
-            return data;
-        }
-
-        @Override
-        protected void onPostExecute (JSONObject result) {
-            if (result == null) Toast.makeText(getBaseContext(), "Place not found", Toast.LENGTH_LONG).show();
-            else {
-                mForecastArea = ForecastArea.parseJSON(result.toString());
-            }
-            if (mForecastArea!=null) {
-                mDisplayText.setText( Integer.toString(mForecastArea.getList().size()) );
-                drawMarkers(mForecastArea.getList());
-            }
-        }
+                    @Override
+                    public void onNext(ForecastArea forecastArea) {
+                        //Log.d("RXJavaNot", "Forecast for " + forecastArea.getList().get(0).getName() + " received by MainActivity subscriber.");
+                        drawMarkers(forecastArea.getList());
+                        // if the forecast is from API -- upload to database cache
+                        if (forecastArea.getIsFromAPI()) uploadForecastsToDB(forecastArea.getList());
+                    }
+                });
 
     }
+
 
     private void drawMarkers (List<ForecastLoc> listForecasts) {
-
         //List<ForecastLoc> listForecasts = mForecastArea.getList();
 
         for(ForecastLoc forecast: listForecasts) {
@@ -184,10 +180,63 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
             Log.d("MAPNot", forecast.getName() + " " + forecast.getCoord().getLat() + " " + forecast.getCoord().getLon());
 
-            googleMap.addMarker(new MarkerOptions().position(pos).title("...")
-                    .icon(BitmapDescriptorFactory.fromResource( icon_num )));
+            String titleForecast = "...";
+            BitmapDescriptor iconImg = BitmapDescriptorFactory.fromResource( icon_num );
 
+            String fCastName = forecast.getName();
+            if (mMarkerOptions.containsKey(fCastName)) {
+                mMarkerOptions.get(fCastName).icon(iconImg);
+            }
+            else {
+                MarkerOptions marker = new MarkerOptions().position(pos).title(titleForecast).icon(iconImg);
+                mMarkerOptions.put(fCastName, marker);
+                googleMap.addMarker(marker);
+            }
         }
+        Log.d("MAPNot", "-----------------");
+
+    }
+
+    private void uploadForecastsToDB (List<ForecastLoc> listForecasts) {
+        try {
+            mainDB.beginTransaction();
+
+            ContentValues cv;
+            for(ForecastLoc forecast: listForecasts) {
+                cv = new ContentValues();
+
+                cv.put(ForecastContract.ForecastLocDB.LOC_NAME_NAME, forecast.getName());
+                double lat = forecast.getCoord().getLat();
+                double lon = forecast.getCoord().getLon();
+                cv.put(ForecastContract.ForecastLocDB.LATITUDE_NAME, lat);
+                cv.put(ForecastContract.ForecastLocDB.LONGITUDE_NAME, lon);
+                cv.put(ForecastContract.ForecastLocDB.TEMPERATURE_NAME, forecast.getMain().getTemp());
+                cv.put(ForecastContract.ForecastLocDB.WEATHER_ID_NAME, forecast.getWeather().get(0).getId());
+                cv.put(ForecastContract.ForecastLocDB.WEATHER_DESCRIPTION_NAME, forecast.getWeather().get(0).getMain());
+                cv.put(ForecastContract.ForecastLocDB.FORECAST_TIME_NAME, forecast.getTime());
+                //long ins = mainDB.insert(ForecastContract.ForecastLocDB.TABLE_NAME, null, cv);
+
+                long result = mainDB.insertWithOnConflict(ForecastContract.ForecastLocDB.TABLE_NAME,
+                        null, cv, SQLiteDatabase.CONFLICT_IGNORE);
+                if (result==-1) mainDB.update(ForecastContract.ForecastLocDB.TABLE_NAME, cv,
+                        ForecastContract.ForecastLocDB.LATITUDE_NAME + "=? AND " +
+                        ForecastContract.ForecastLocDB.LONGITUDE_NAME + "=?",
+                        new String[] { Double.toString(lat),  Double.toString(lon)});
+
+                //Log.d("DBnot", forecast.getName() + Double.toString(lat) + " " + Double.toString(lon) + " " + Long.toString(result));
+
+            }
+
+            mainDB.setTransactionSuccessful();
+        }
+        catch (SQLException e) {
+            // error
+            Log.e("DBerr", e.getMessage() );
+        }
+        finally {
+            mainDB.endTransaction();
+        }
+
     }
 
 }

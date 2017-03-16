@@ -5,30 +5,33 @@ package com.example.aawee.weatherdisplay.classes;
  */
 
 public class WeatherMain {
-    double temp; // temperature
-    double temp_min;
-    double temp_max;
+    private double temp; // temperature
+//    private double temp_min;
+//    private double temp_max;
+//
+//    private double pressure;
+//    private double humidity;
 
-    double pressure;
-    double humidity;
+    public WeatherMain(double temperature) {
+        temp = temperature;
+    }
 
     public double getTemp() {
         return temp;
     }
 
-    public double getTemp_min() {
-        return temp_min;
-    }
+//    public double getTemp_min() {
+//        return temp_min;
+//    }
+//
+//    public double getTemp_max() {
+//        return temp_max;
+//    }
+//
+//    public double getPressure() {
+//        return pressure;
+//    }
+//
+//    public double getHumidity() { return humidity; }
 
-    public double getTemp_max() {
-        return temp_max;
-    }
-
-    public double getPressure() {
-        return pressure;
-    }
-
-    public double getHumidity() {
-        return humidity;
-    }
 }

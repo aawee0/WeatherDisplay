@@ -11,29 +11,40 @@ import java.util.List;
  */
 
 public class ForecastArea {
-    private int cod; // code
-    private double calctime;
-    private int cnt; // number of local forecasts
+    //private int cod; // code
+    //private double calctime;
+    //private int cnt; // number of local forecasts
+
     private List<ForecastLoc> list; // list of local forecasts
+    private boolean isFromAPI; // true (means got from API) by default, unless assigned otherwise
 
     public ForecastArea() {
         list = new ArrayList<ForecastLoc>();
+        isFromAPI = true;
     }
 
-    public int getCod() {
-        return cod;
+    public ForecastArea(List<ForecastLoc> forecastList) {
+        list = forecastList;
+        isFromAPI = true;
     }
 
-    public double getCalctime() {
-        return calctime;
-    }
-
-    public int getCnt() {
-        return cnt;
-    }
+//    public void initIsFresh () {
+//        isFresh = new boolean[list.size()];
+//        for (int i = 0; i<list.size(); i++) isFresh[i] = true;
+//    }
 
     public List<ForecastLoc> getList() {
         return list;
+    }
+
+    public boolean getIsFromAPI () { return isFromAPI; }
+
+    public void setList (List<ForecastLoc> forecastList) {
+        list = forecastList;
+    }
+
+    public void setIsFromAPI(boolean fromDB) {
+        isFromAPI = fromDB;
     }
 
     public static ForecastArea parseJSON(String response) {
@@ -41,5 +52,7 @@ public class ForecastArea {
         ForecastArea forecastArea = gson.fromJson(response, ForecastArea.class);
         return forecastArea;
     }
+
+
 
 }

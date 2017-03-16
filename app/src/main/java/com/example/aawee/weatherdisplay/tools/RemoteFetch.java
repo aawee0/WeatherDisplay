@@ -1,27 +1,28 @@
 package com.example.aawee.weatherdisplay.tools;
 
-import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
 import android.util.Log;
 
 import com.example.aawee.weatherdisplay.OpenWeatherClient;
-import com.example.aawee.weatherdisplay.R;
+import com.example.aawee.weatherdisplay.classes.Coord;
 import com.example.aawee.weatherdisplay.classes.ForecastArea;
+import com.example.aawee.weatherdisplay.classes.ForecastLoc;
+import com.example.aawee.weatherdisplay.classes.WeatherMain;
+import com.example.aawee.weatherdisplay.classes.WeatherType;
+import com.example.aawee.weatherdisplay.database.ForecastContract;
 
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.math.RoundingMode;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.List;
 
 import retrofit2.Retrofit;
 import retrofit2.adapter.rxjava.RxJavaCallAdapterFactory;
 import retrofit2.converter.gson.GsonConverterFactory;
 import rx.Observable;
+import rx.Subscriber;
+import rx.functions.Func1;
 import rx.schedulers.Schedulers;
+import rx.subjects.BehaviorSubject;
 
 /**
  * Created by Aawee on 6/03/2017.
@@ -29,30 +30,81 @@ import rx.schedulers.Schedulers;
 
 public class RemoteFetch {
 
-    private static final String OPEN_WEATHER_MAP_API = "http://api.openweathermap.org/data/2.5/weather?q=%s&units=metric&appid=%s";
-
-    //private static final String OPEN_WEATHER_BULK_API =
-    //        "http://api.openweathermap.org/data/2.5/box/city?bbox=%f,%f,%f,%f,%f&appid=%s";
+    // CONSTANTS
     private static final String OPEN_WEATHER_BULK_API = "http://api.openweathermap.org/data/2.5/box/city?bbox=";
-
     private static final String OPEN_WEATHER_BASE_URL = "http://api.openweathermap.org/";
+    private static final String OPEN_WEATHER_API_KEY = "45f96ecf780e933deba504d9df18e977";
 
-//    public static JSONObject getJsonForCity(Context context, String city){
-//        try {
-//            URL url = new URL(String.format(OPEN_WEATHER_MAP_API, city));
-//            String key = context.getString(R.string.open_weather_maps_app_id);
-//
-//            return getJsonForUrl(url, key);
-//        }
-//        catch (Exception e) {
-//            Log.e("JSONerr", e.getMessage());
-//            return null;
-//        }
-//    }
+
+    public static Observable<ForecastArea> getConcatenatedResponse (SQLiteDatabase sqLiteDatabase,
+                                                                    double lonLeft, double latBottom,
+                                                                    double lonRight, double latTop, int zoom) {
+
+        // observable, emitting forecast for area from database
+        Observable<ForecastArea> callToDb = (RemoteFetch.getForecastFromDB(sqLiteDatabase, lonLeft, latBottom, lonRight, latTop))
+                .filter(new Func1<ForecastArea, Boolean>() {
+                    @Override
+                    public Boolean call(ForecastArea forecastArea) {
+                        return( forecastArea.getList().size() > 0 );
+                    }});
+        // .. and from API
+        Observable<ForecastArea> callToApi = RemoteFetch.getForecastResponse(lonLeft, latBottom, lonRight,latTop, zoom);
+        Observable<ForecastArea> call = Observable.concat(callToDb, callToApi);
+
+        final BehaviorSubject<ForecastArea> behavior = BehaviorSubject.create();
+
+        call.subscribe(new Subscriber<ForecastArea>() {
+            @Override
+            public void onCompleted() {
+                //Log.d("RXJavaNot", "Subscriber at RemoteFetch completed");
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                behavior.onError(e);
+                Log.e("RXJavaErr", e.getMessage());
+            }
+
+            @Override
+            public void onNext(ForecastArea forecastArea) {
+                if (behavior.hasValue()) {
+                    // IF behaviorSubject has previous value (of forecastArea)
+                    // THEN delete all duplicates from the current
+                    ForecastArea oldForecastArea = behavior.getValue();
+                    List<ForecastLoc> oldList = oldForecastArea.getList();
+                    List<ForecastLoc> newList = forecastArea.getList();
+
+                    //Log.d("RXJavaNot", " previous forecast is from API " + Boolean.toString(oldForecastArea.getIsFromAPI()));
+                    //Log.d("RXJavaNot", "current forecast is from API " + Boolean.toString(forecastArea.getIsFromAPI()));
+
+                    for (int i=0; i<oldList.size();i++) {
+                        for (int j = 0; j<newList.size(); ) {
+                            //Log.d("RXJavaNot", newList.get(j).getName() + " " + oldList.get(i).getName()
+                            //        + " " + newList.get(j).getTime() + " " + oldList.get(i).getTime());
+
+                            // if verified forecasts are for the same location
+                            // and the new one isn't fresh, then remove it from the list
+                            if (newList.get(j).getCoord().getLat() == oldList.get(i).getCoord().getLat()
+                                    && newList.get(j).getCoord().getLon() == oldList.get(i).getCoord().getLon()
+                                    && newList.get(j).getTime() <= oldList.get(i).getTime() )
+                                newList.remove(j);
+                            else j++;
+                        }
+                    }
+                    forecastArea.setList(newList);
+                }
+                behavior.onNext(forecastArea);
+            }
+
+        });
+
+
+        return behavior;
+    }
 
     // request for weather using Retrofit (get), Gson (parse), Rxjava (asynchronous call)
     public static Observable<ForecastArea> getForecastResponse (double lonLeft, double latBottom,
-                                           double lonRight, double latTop, int zoom, String apiKey) {
+                                           double lonRight, double latTop, int zoom) {
 
         RxJavaCallAdapterFactory rxAdapter = RxJavaCallAdapterFactory.createWithScheduler(Schedulers.io());
 
@@ -66,82 +118,60 @@ public class RemoteFetch {
 
         Log.d("RXJavaNot", OPEN_WEATHER_BULK_API + Double.toString(lonLeft) + "," + Double.toString(latBottom)
                 + "," + Double.toString(lonRight) + "," + Double.toString(latTop) + "," + Integer.toString(zoom)
-                + "&appid=45f96ecf780e933deba504d9df18e977");
+                + "&appid=" + OPEN_WEATHER_API_KEY);
 
         return client.forecastsForArea(Double.toString(lonLeft) + "," + Double.toString(latBottom)
-                + "," + Double.toString(lonRight) + "," + Double.toString(latTop) + "," + Integer.toString(zoom), apiKey);
+                + "," + Double.toString(lonRight) + "," + Double.toString(latTop) + ","
+                + Integer.toString(zoom), OPEN_WEATHER_API_KEY).cache();
+    }
+
+    // request for weather from DB (cache)
+    public static Observable<ForecastArea> getForecastFromDB (SQLiteDatabase sqLiteDatabase, double lonLeft, double latBottom,
+                                                              double lonRight, double latTop) {
+
+        String variable = "AND ";
+        if(lonLeft > 0 && lonRight <0) variable = "OR "; // if the screen crosses the 180-longitude
+        String whereClause = ForecastContract.ForecastLocDB.LATITUDE_NAME + ">? AND "
+                + ForecastContract.ForecastLocDB.LATITUDE_NAME + "<? AND "
+                + ForecastContract.ForecastLocDB.LONGITUDE_NAME + ">? " + variable
+                + ForecastContract.ForecastLocDB.LONGITUDE_NAME + "<?";
+
+        // QUERY that takes out forecasts for locations inside the given borders
+        Cursor cursor = sqLiteDatabase.query(ForecastContract.ForecastLocDB.TABLE_NAME, null, whereClause,
+                new String[] { Double.toString(latBottom),  Double.toString(latTop),
+                        Double.toString(lonLeft), Double.toString(lonRight)}, null, null,
+                ForecastContract.ForecastLocDB._ID);
+
+        ArrayList<ForecastLoc> forecasts = new ArrayList<ForecastLoc>();
+
+        while (cursor.moveToNext()) {
+            String name = cursor.getString(cursor.getColumnIndex(ForecastContract.ForecastLocDB.LOC_NAME_NAME));
+            double lat = cursor.getDouble(cursor.getColumnIndex(ForecastContract.ForecastLocDB.LATITUDE_NAME));
+            double lon = cursor.getDouble(cursor.getColumnIndex(ForecastContract.ForecastLocDB.LONGITUDE_NAME));
+            double temp = cursor.getDouble(cursor.getColumnIndex(ForecastContract.ForecastLocDB.TEMPERATURE_NAME));
+            int weatherID = cursor.getInt(cursor.getColumnIndex(ForecastContract.ForecastLocDB.WEATHER_ID_NAME));
+            String weatherDesc = cursor.getString(cursor.getColumnIndex(ForecastContract.ForecastLocDB.WEATHER_DESCRIPTION_NAME));
+            long timeCreated = cursor.getInt(cursor.getColumnIndex(ForecastContract.ForecastLocDB.FORECAST_TIME_NAME));
+
+            Coord coord = new Coord(lat, lon);
+            WeatherMain weatherMain = new WeatherMain(temp);
+            ArrayList<WeatherType> weatherTypes = new ArrayList<WeatherType>();
+            weatherTypes.add(new WeatherType(weatherID, weatherDesc));
+
+            forecasts.add(new ForecastLoc(name, coord, weatherMain, weatherTypes, timeCreated));
+
+            //Log.d("DBnot", name + Double.toString(lat) + " " + Double.toString(lon) + " received from DB observable" );
+
+        }
+
+        ForecastArea forecastArea = new ForecastArea(forecasts);
+        forecastArea.setIsFromAPI(false);
+        cursor.close();
+
+        return Observable.just(forecastArea);
     }
 
 
-
-    public static JSONObject getJsonForArea(Context context,
-                                            double lonLeft, double latBottom, double lonRight, double latTop, double zoom) {
-        try {
-            //URL url = new URL(String.format(OPEN_WEATHER_BULK_API, lonLeft, latBottom, lonRight, latTop, zoom,
-            //        context.getString(R.string.open_weather_maps_app_id)));
-
-            DecimalFormat df = new DecimalFormat("#.####");
-            df.setRoundingMode(RoundingMode.CEILING);
-
-            URL url = new URL( OPEN_WEATHER_BULK_API + Double.toString(lonLeft) + "," + Double.toString(latBottom) + ","
-                    + Double.toString(lonRight) + "," + Double.toString(latTop) + "," + Integer.toString( (int) zoom )
-                    + "&appid=" + context.getString(R.string.open_weather_maps_app_id) );
-
-            return getJsonForUrl(url);
-        }
-        catch (Exception e) {
-            Log.e("JSONerr", "For area " + e.getMessage().toString());
-            return null;
-        }
-    }
-
-    public static JSONObject getJsonForUrl(URL url){
-        HttpURLConnection connection = null ;
-        InputStream is = null;
-
-        try {
-            Log.d("JSONnot", url.toString() );
-
-            connection = (HttpURLConnection) url.openConnection();
-
-            int status = connection.getResponseCode();
-            Log.d("JSONnot", Integer.toString(status) + " STATUS ");
-
-            //is = connection.getInputStream();
-            if (status < HttpURLConnection.HTTP_BAD_REQUEST) is = connection.getInputStream();
-            else is = connection.getErrorStream();
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-
-            StringBuffer json = new StringBuffer();
-            String tmp = "";
-
-            while ((tmp = reader.readLine()) != null)
-                json.append(tmp).append("\n");
-            reader.close();
-            connection.disconnect();
-
-            JSONObject data = new JSONObject(json.toString());
-
-            Log.d("JSONnot", json.toString());
-
-            if (data.getInt("cod") != 200) {
-                return null;
-            }
-            return data;
-
-        }
-        catch (Exception e) {
-            e.printStackTrace();
-            Log.e("JSONerr", "For url " + e.getMessage().toString());
-            return null;
-        }
-        finally {
-            try { is.close(); } catch(Throwable t) {}
-            try { connection.disconnect(); } catch(Throwable t) {}
-        }
-
-    }
 
 
 
